@@ -27,15 +27,12 @@ def get_lang_keyboard():
     builder.button(text="🇷🇺 Русский")
     return builder.as_markup(resize_keyboard=True)
 
-# API lardan video linkini olish
 async def fetch_video_url(url):
     apis = [
         "https://api.all-in-one-downloader.workers.dev/api/download",
         "https://api.cobalt.tools/api/json"
     ]
-    
     async with aiohttp.ClientSession() as session:
-        # 1-API ni tekshirish
         try:
             async with session.post(apis[0], json={"url": url}, timeout=15) as res:
                 if res.status == 200:
@@ -44,8 +41,6 @@ async def fetch_video_url(url):
                         return data["links"][0].get("url")
         except:
             pass
-            
-        # 2-API ni tekshirish
         try:
             headers = {"Accept": "application/json", "Content-Type": "application/json"}
             async with session.post(apis[1], json={"url": url, "vQuality": "720"}, headers=headers, timeout=15) as res:
@@ -54,7 +49,6 @@ async def fetch_video_url(url):
                     return data.get("url")
         except:
             pass
-            
     return None
 
 @dp.message(Command("start"))
@@ -85,32 +79,44 @@ async def handle_everything(message: types.Message):
         loading_text = "Обработка ссылки... Пожалуйста, подождите." if is_ru else "Havola tekshirilmoqda... Iltimos, kuting."
         msg = await message.answer(loading_text)
         
-        # Sifati zo'r video linkini olamiz
         video_url = await fetch_video_url(user_text)
 
         if video_url:
             file_name = f"video_{user_id}.mp4"
             try:
-                # Videoni Render serverining o'ziga yuklab olamiz (Xatolik bo'lmasligi uchun)
+                # Videoni parchalab hajmini tekshiramiz
                 async with aiohttp.ClientSession() as session:
                     async with session.get(video_url, timeout=60) as response:
                         if response.status == 200:
+                            # Kontent hajmini baytlarda olamiz
+                            content_length = response.headers.get('Content-Length')
+                            
+                            # Agar video 45 MB dan katta bo'lsa, serverni qiynamay srazu yuklab olish linkini beramiz
+                            if content_length and int(content_length) > 45 * 1024 * 1024:
+                                link_text = f"📁 Ссылка для скачивания (Файл слишком большой для Telegram): [Скачать видео]({video_url})" if is_ru else f"📁 Yuklab olish uchun havola (Fayl Telegram uchun juda katta): [Videoni yuklash]({video_url})"
+                                await message.answer(link_text, parse_mode="Markdown")
+                                await msg.delete()
+                                return
+                            
+                            # Agar 45 MB dan kichik bo'lsa, odatiy fayl qilib yuboramiz
                             with open(file_name, 'wb') as f:
                                 f.write(await response.read())
                 
-                # Videoni haqiqiy fayl ko'rinishida Telegramga yuboramiz
                 video_file = types.FSInputFile(file_name)
                 caption_text = "Готово! ✨" if is_ru else "Tayyor! ✨"
                 await message.answer_video(video=video_file, caption=caption_text)
                 
             except Exception as e:
-                error_msg = f"Ошибка при отправке: {e}" if is_ru else f"Yuborishda xatolik: {e}"
-                await message.answer(error_msg)
+                # Har qanday kutilmagan xatolikda ham foydalanuvchi quruq qolmasligi uchun linkni tashlab yuboradi
+                fallback_text = f"🔗 Ошибка прямого отправления. Скачайте по ссылке: [Ссылка]({video_url})" if is_ru else f"🔗 To'g'ridan-to'g'ri yuborishda xatolik. Havola orqali yuklang: [Havola]({video_url})"
+                await message.answer(fallback_text, parse_mode="Markdown")
             finally:
-                # Server to'lib qolmasligi uchun faylni darhol o'chiramiz
                 if os.path.exists(file_name):
                     os.remove(file_name)
-                await msg.delete()
+                try:
+                    await msg.delete()
+                except:
+                    pass
         else:
             err_text = "Не удалось скачать видео. Попробуйте позже." if is_ru else "Videoni yuklab bo'lmadi. Birozdan so'ng urinib ko'ring."
             await message.answer(err_text)
