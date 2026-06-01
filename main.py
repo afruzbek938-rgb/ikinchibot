@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiohttp import web
-import aiohttp
+import yt_dlp
 
 # 🟢 BOT TOKEN (O'zingiznikini qo'ying)
 BOT_TOKEN = "8615110980:AAHl1YLkvZ1Z8qUr45uI3dMwx-lR0lKVp1E"
@@ -55,56 +55,42 @@ async def handle_everything(message: types.Message):
         loading_text = "Обработка ссылки... Пожалуйста, подождите." if is_ru else "Havola tekshirilmoqda... Iltimos, kuting."
         msg = await message.answer(loading_text)
         
-        # O'sha siz aytgan eng birinchi ishlagan ishonchli API tizimi
-        api_url = "https://api.v01.es/api/download"
-        payload = {"url": user_text}
+        file_name = f"video_{user_id}.mp4"
+        
+        # Bloklanishni aylanib o'tadigan xavfsiz sozlamalar
+        ydl_opts = {
+            'format': 'best[ext=mp4]/best', # Telegram oson o'qishi uchun MP4 format
+            'outtmpl': file_name,
+            'quiet': True,
+            'geo_bypass': True,  # Blokdan aylanib o'tish mexanizmi
+            'no_warnings': True,
+        }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(api_url, json=payload, timeout=20) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        video_url = None
-                        if "links" in data and len(data["links"]) > 0:
-                            video_url = data["links"][0].get("url")
-                        elif "url" in data:
-                            video_url = data.get("url")
-                        
-                        if video_url:
-                            file_name = f"download_{user_id}.mp4"
-                            try:
-                                # O'sha sizga yoqqan qism: videoni serverga yuklab olamiz
-                                async with session.get(video_url, timeout=45) as video_res:
-                                    if video_res.status == 200:
-                                        with open(file_name, 'wb') as f:
-                                            f.write(await video_res.read())
-                                
-                                # Videoni telegramga toza fayl qilib yuboramiz
-                                video_file = types.FSInputFile(file_name)
-                                caption_text = "Готово! ✨" if is_ru else "Tayyor! ✨"
-                                await message.answer_video(video=video_file, caption=caption_text)
-                            
-                            except Exception:
-                                # Agar video juda katta bo'lsa va yuklashda xato bersa, srazu linkini beradi
-                                fallback_text = (
-                                    f"📁 Видео слишком большое. Скачайте напрямую: [Скачать]({video_url})" 
-                                    if is_ru else 
-                                    f"📁 Video juda katta. Havola orqali yuklab oling: [Yuklash]({video_url})"
-                                )
-                                await message.answer(fallback_text, parse_mode="Markdown")
-                            finally:
-                                # Serverda fayl qolib ketmasligi uchun o'chiramiz
-                                if os.path.exists(file_name):
-                                    os.remove(file_name)
-                        else:
-                            await message.answer("Ошибка: Видео не найдено." if is_ru else "Xatolik: Video topilmadi.")
-                    else:
-                        await message.answer("Сервис занят. Попробуйте еще раз." if is_ru else "Server band. Birozdan so'ng urinib ko'ring.")
-            await msg.delete()
+            # Videoni yuklab olish qismi
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([user_text])
+            
+            # Agar fayl muvaffaqiyatli yuklangan bo'lsa
+            if os.path.exists(file_name):
+                # Hajmini tekshiramiz (Agar 45 MB dan katta bo'lsa, Telegram baribir o'tkazmaydi)
+                file_size = os.path.getsize(file_name)
+                if file_size > 45 * 1024 * 1024:
+                    err_size = "Файл слишком большой для Telegram (больше 45MB)." if is_ru else "Fayl Telegram uchun juda katta (45MB dan ko'p)."
+                    await message.answer(err_size)
+                else:
+                    video_file = types.FSInputFile(file_name)
+                    caption_text = "Готово! ✨" if is_ru else "Tayyor! ✨"
+                    await message.answer_video(video=video_file, caption=caption_text)
+            else:
+                await message.answer("Ошибка: Не удалось загрузить файл." if is_ru else "Xatolik: Faylni yuklab bo'lmadi.")
 
         except Exception as e:
             await message.answer(f"Error: {e}")
+        finally:
+            # Tozalash ishlari
+            if os.path.exists(file_name):
+                os.remove(file_name)
             try:
                 await msg.delete()
             except:
