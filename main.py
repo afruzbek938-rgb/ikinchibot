@@ -57,38 +57,41 @@ async def handle_everything(message: types.Message):
         
         file_name = f"video_{user_id}.mp4"
         
-        # Bloklanishni aylanib o'tadigan xavfsiz sozlamalar
+        # O'sha VS Code dagi eng birinchi sozlamalar + Android blockdan o'tish
         ydl_opts = {
-            'format': 'best[ext=mp4]/best', # Telegram oson o'qishi uchun MP4 format
+            'format': 'best[ext=mp4]/best',
             'outtmpl': file_name,
             'quiet': True,
-            'geo_bypass': True,  # Blokdan aylanib o'tish mexanizmi
             'no_warnings': True,
+            # YouTube bloklamasligi uchun telefon brauzeri qiyofasini olamiz:
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                }
+            }
         }
 
         try:
-            # Videoni yuklab olish qismi
+            # Xuddi VS Code dagidek to'g'ridan-to'g'ri yuklash
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([user_text])
             
-            # Agar fayl muvaffaqiyatli yuklangan bo'lsa
             if os.path.exists(file_name):
-                # Hajmini tekshiramiz (Agar 45 MB dan katta bo'lsa, Telegram baribir o'tkazmaydi)
+                # Telegram 50MB dan kattasini o'tkazmagani uchun tekshiramiz
                 file_size = os.path.getsize(file_name)
-                if file_size > 45 * 1024 * 1024:
-                    err_size = "Файл слишком большой для Telegram (больше 45MB)." if is_ru else "Fayl Telegram uchun juda katta (45MB dan ko'p)."
+                if file_size > 48 * 1024 * 1024:
+                    err_size = "Файл слишком большой для отправки (больше 50MB)." if is_ru else "Fayl yuborish uchun juda katta (50MB dan ko'p)."
                     await message.answer(err_size)
                 else:
                     video_file = types.FSInputFile(file_name)
                     caption_text = "Готово! ✨" if is_ru else "Tayyor! ✨"
                     await message.answer_video(video=video_file, caption=caption_text)
             else:
-                await message.answer("Ошибка: Не удалось загрузить файл." if is_ru else "Xatolik: Faylni yuklab bo'lmadi.")
+                await message.answer("Ошибка при загрузке." if is_ru else "Yuklashda xatolik yuz berdi.")
 
         except Exception as e:
             await message.answer(f"Error: {e}")
         finally:
-            # Tozalash ishlari
             if os.path.exists(file_name):
                 os.remove(file_name)
             try:
