@@ -1,4 +1,5 @@
 import asyncio
+import os
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
@@ -54,8 +55,8 @@ async def handle_everything(message: types.Message):
         loading_text = "Обработка ссылки... Пожалуйста, подождите." if is_ru else "Havola tekshirilmoqda... Iltimos, kuting."
         msg = await message.answer(loading_text)
         
-        # Yangi va barqaror universal yuklovchi API
-        api_url = f"https://api.v01.es/api/download"
+        # O'sha siz aytgan eng birinchi ishlagan ishonchli API tizimi
+        api_url = "https://api.v01.es/api/download"
         payload = {"url": user_text}
 
         try:
@@ -64,7 +65,6 @@ async def handle_everything(message: types.Message):
                     if response.status == 200:
                         data = await response.json()
                         
-                        # API dan video linkini ajratib olamiz
                         video_url = None
                         if "links" in data and len(data["links"]) > 0:
                             video_url = data["links"][0].get("url")
@@ -72,25 +72,39 @@ async def handle_everything(message: types.Message):
                             video_url = data.get("url")
                         
                         if video_url:
+                            file_name = f"download_{user_id}.mp4"
                             try:
+                                # O'sha sizga yoqqan qism: videoni serverga yuklab olamiz
+                                async with session.get(video_url, timeout=45) as video_res:
+                                    if video_res.status == 200:
+                                        with open(file_name, 'wb') as f:
+                                            f.write(await video_res.read())
+                                
+                                # Videoni telegramga toza fayl qilib yuboramiz
+                                video_file = types.FSInputFile(file_name)
                                 caption_text = "Готово! ✨" if is_ru else "Tayyor! ✨"
-                                await message.answer_video(video=video_url, caption=caption_text)
+                                await message.answer_video(video=video_file, caption=caption_text)
+                            
                             except Exception:
-                                # Agar video Telegram o'tkazish limitidan juda katta bo'lsa (masalan, boyagi 71 MB)
+                                # Agar video juda katta bo'lsa va yuklashda xato bersa, srazu linkini beradi
                                 fallback_text = (
-                                    f"📁 Видео слишком большое для отправки файлом. Скачайте напрямую: [Скачать видео]({video_url})" 
+                                    f"📁 Видео слишком большое. Скачайте напрямую: [Скачать]({video_url})" 
                                     if is_ru else 
-                                    f"📁 Video fayl ko'rinishida yuborish uchun juda katta. Mana havola: [Videoni yuklash]({video_url})"
+                                    f"📁 Video juda katta. Havola orqali yuklab oling: [Yuklash]({video_url})"
                                 )
                                 await message.answer(fallback_text, parse_mode="Markdown")
+                            finally:
+                                # Serverda fayl qolib ketmasligi uchun o'chiramiz
+                                if os.path.exists(file_name):
+                                    os.remove(file_name)
                         else:
-                            await message.answer("Ошибка: Видео не найдено на сервере." if is_ru else "Xatolik: Serverdan video topilmadi.")
+                            await message.answer("Ошибка: Видео не найдено." if is_ru else "Xatolik: Video topilmadi.")
                     else:
-                        await message.answer("Сервис временно занят. Попробуйте еще раз." if is_ru else "Server band. Birozdan so'ng urinib ko'ring.")
+                        await message.answer("Сервис занят. Попробуйте еще раз." if is_ru else "Server band. Birozdan so'ng urinib ko'ring.")
             await msg.delete()
 
         except Exception as e:
-            await message.answer(f"API Error: {e}")
+            await message.answer(f"Error: {e}")
             try:
                 await msg.delete()
             except:
