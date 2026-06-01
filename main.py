@@ -1,9 +1,9 @@
 import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiohttp import web
-from urllib.parse import quote
+import yt_dlp
 
 # 🟢 BOT TOKEN (O'zingiznikini qo'ying)
 BOT_TOKEN = "8615110980:AAHl1YLkvZ1Z8qUr45uI3dMwx-lR0lKVp1E"
@@ -13,6 +13,9 @@ dp = Dispatcher()
 
 user_languages = {}
 
+# 🔥 AVTOMATIK BAZA: Bot videolarni (link -> file_id) shaklida o'zi eslab qoladi
+video_database = {}
+
 async def startup_server():
     app = web.Application()
     runner = web.AppRunner(app)
@@ -20,28 +23,33 @@ async def startup_server():
     site = web.TCPSite(runner, '0.0.0.0', 10000)
     await site.start()
 
+def get_lang_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🇺🇿 O'zbekcha")
+    builder.button(text="🇷🇺 Русский")
+    return builder.as_markup(resize_keyboard=True)
+
+# To'g'ridan-to'g'ri video oqimi linkini olish
+def extract_direct_url(url):
+    ydl_opts = {
+        'format': 'best[ext=mp4]/best',
+        'quiet': True,
+        'no_warnings': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+            return info.get('url')
+        except Exception as e:
+            print(f"YTDL Error: {e}")
+            return None
+
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    # Oddiy va tushunarli inline tugmalar bilan til tanlash
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🇺🇿 O'zbekcha", callback_data="lang_uz")
-    builder.button(text="🇷🇺 Русский", callback_data="lang_ru")
-    builder.adjust(2)
-    
     await message.answer(
         "🇺🇿 Iltimos, tilni tanlang:\n🇷🇺 Пожалуйста, выберите язык:",
-        reply_markup=builder.as_markup()
+        reply_markup=get_lang_keyboard()
     )
-
-@dp.callback_query(lambda c: c.data.startswith("lang_"))
-async def set_language(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    lang = callback.data.split("_")[1]
-    user_languages[user_id] = lang
-    
-    msg = "O'zbek tili tanlandi! Menga video havolasini (Instagram/YouTube/TikTok) yuboring! 🎬" if lang == "uz" else "Выбран русский язык! Отправьте мне ссылку на видео! 🎬"
-    await callback.message.answer(msg)
-    await callback.answer()
 
 @dp.message()
 async def handle_everything(message: types.Message):
@@ -51,43 +59,52 @@ async def handle_everything(message: types.Message):
     if not user_text:
         return
 
+    if user_text == "🇺🇿 O'zbekcha":
+        user_languages[user_id] = "uz"
+        await message.answer("O'zbek tili tanlandi! Menga video havolasini yuboring! 🎬")
+        return
+    elif user_text == "🇷🇺 Русский":
+        user_languages[user_id] = "ru"
+        await message.answer("Выбран русский язык! Отправьте мне ссылку на видео! 🎬")
+        return
+
     lang = user_languages.get(user_id, "uz")
     is_ru = lang == "ru"
 
-    # Ijtimoiy tarmoq linklarini tekshiramiz
     if any(x in user_text for x in ["youtube.com", "youtu.be", "instagram.com", "tiktok.com", "facebook.com"]):
         
-        encoded_url = quote(user_text)
-        
-        # Foydalanuvchiga videoni qulay yuklab olishi uchun tugmalar builder-i
-        builder = InlineKeyboardBuilder()
-        
-        if "instagram.com" in user_text:
-            builder.button(text="📥 Скачать (SnapInsta)" if is_ru else "📥 Yuklash (SnapInsta)", url=f"https://snapinsta.app/?url={encoded_url}")
-            builder.button(text="📥 Альтернатива (SaveFrom)", url=f"https://savefrom.net/?url={encoded_url}")
-        elif "tiktok.com" in user_text:
-            builder.button(text="📥 Скачать (SSSTik)" if is_ru else "📥 Yuklash (SSSTik)", url=f"https://ssstik.io/uz?url={encoded_url}")
-            builder.button(text="📥 Альтернатива (SaveFrom)", url=f"https://savefrom.net/?url={encoded_url}")
-        else:
-            builder.button(text="📥 Скачать (SaveFrom)" if is_ru else "📥 Yuklash (SaveFrom)", url=f"https://savefrom.net/?url={encoded_url}")
-            builder.button(text="📥 Альтернатива (Y2Mate)", url=f"https://y2mate.com/?url={encoded_url}")
-            
-        builder.adjust(1) # Tugmalarni qatorasiga chiroyli joylash
+        # 1-QADAM: Bot bazani tekshiradi. Agar bu link oldin so'ralgan bo'lsa, srazu videoni beradi!
+        if user_text in video_database:
+            caption_text = "Готово! (Из базы) 🚀" if is_ru else "Tayyor! (Bazadan olindi) 🚀"
+            try:
+                await message.answer_video(video=video_database[user_text], caption=caption_text)
+                return
+            except Exception:
+                # Agar bazadagi file_id eskorgan bo'lsa, pastdagi kodga o'tib qayta yuklaydi
+                pass
 
-        reply_text = (
-            "✨ **Ваша ссылка успешно обработана\!**\n\nНажмите на кнопку ниже, чтобы быстро и без рекламы скачать видео в один клик:"
-            if is_ru else
-            "✨ **Videongiz muvaffaqiyatli tayyorlandi\!**\n\nVideoni reklamasiz va tez yuklab olish uchun pastdagi tugmani bosing:"
-        )
+        # 2-QADAM: Agar link bazada yo'l bo'lsa, internetdan qidiradi
+        loading_text = "📥 Загружаю видео... Пожалуйста, подождите." if is_ru else "📥 Video yuklanmoqda... Iltimos, kuting."
+        msg = await message.answer(loading_text)
         
-        await message.answer(reply_text, parse_mode="MarkdownV2", reply_markup=builder.as_markup())
-    else:
-        warn_text = "Пожалуйста, отправьте корректную ссылку!" if is_ru else "Iltimos, to'g'ri video havolasini yuboring!"
-        await message.answer(warn_text)
+        loop = asyncio.get_event_loop()
+        direct_video_url = await loop.run_in_executor(None, extract_direct_url, user_text)
 
-async def main():
-    await startup_server()  
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        if direct_video_url:
+            try:
+                caption_text = "Готово! (Сохранено в базу) ✨" if is_ru else "Tayyor! (Bazaga saqlandi) ✨"
+                
+                # Videoni yuboramiz va Telegram qaytargan xabarni o'zgaruvchiga olamiz
+                sent_message = await message.answer_video(video=direct_video_url, caption=caption_text)
+                
+                # 🔥 MANA SHU YERDA MO'JIZA: Bot yuborilgan videoning yashirin ID kodini bazaga avtomatik yozib qo'yadi!
+                if sent_message.video:
+                    video_database[user_text] = sent_message.video.file_id
+                
+                await msg.delete()
+            except Exception:
+                fallback_text = (
+                    f"📁 Видео слишком большое. Ссылка: [Скачать]({direct_video_url})" 
+                    if is_ru else 
+                    f"📁 Video hajmi juda katta. Havola: [Yuklash]({direct_video_url})"
+                )
